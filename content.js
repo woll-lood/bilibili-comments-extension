@@ -1,5 +1,5 @@
-// content.js - 优化版 + 支持 av 号
-// 功能：B站视频/番剧/动态评论爬取，支持 BV/av 号、二级评论、暂停/继续、断点续爬、低内存占用
+// content.js - 优化版 + 支持 av 号 + 支持旧版动态 (t.bilibili.com)
+// 功能：B站视频/番剧/动态评论爬取，支持 BV/av 号、新旧动态、二级评论、暂停/继续、断点续爬、低内存占用
 
 // 确保 CryptoJS 可用
 if (typeof CryptoJS === 'undefined') {
@@ -62,7 +62,7 @@ async function initCrawler() {
             </div>
             <div class="crawler-log" id="crawler-log"></div>
         </div>
-        <div class="watermark">Created by Ldyer (优化版+av支持)</div>
+        <div class="watermark">Created by Ldyer (支持av/旧版动态)</div>
     `;
     document.body.appendChild(container);
 
@@ -126,10 +126,13 @@ async function initCrawler() {
     // MD5 加密
     function md5(str) { return CryptoJS.MD5(str).toString(); }
 
-    // 获取页面类型和ID（支持 BV 和 av）
+    // 获取页面类型和ID（支持 BV/av，新旧动态）
     function getPageInfo() {
         const path = window.location.pathname;
-        if (path.includes('/video/')) {
+        const host = window.location.hostname;
+
+        // 视频页面 (www.bilibili.com/video/...)
+        if (host === 'www.bilibili.com' && path.includes('/video/')) {
             // 匹配 BV 号
             let match = path.match(/\/video\/(BV\w+)/);
             if (match) return { type: 'video', id: match[1] };
@@ -137,17 +140,26 @@ async function initCrawler() {
             match = path.match(/\/video\/av(\d+)/);
             if (match) return { type: 'video', id: match[1] };
             return { type: 'video', id: '' };
-        } else if (path.includes('/bangumi/play/')) {
+        }
+        // 番剧页面
+        if (host === 'www.bilibili.com' && path.includes('/bangumi/play/')) {
             const match = path.match(/\/bangumi\/play\/(\w+)/);
             return { type: 'bangumi', id: match ? match[1] : '' };
-        } else if (path.includes('/opus/')) {
+        }
+        // 新版动态页面 (www.bilibili.com/opus/...)
+        if (host === 'www.bilibili.com' && path.includes('/opus/')) {
             const match = path.match(/\/opus\/(\w+)/);
+            return { type: 'opus', id: match ? match[1] : '' };
+        }
+        // 旧版动态页面 (t.bilibili.com/数字)
+        if (host === 't.bilibili.com' && /^\/(\d+)$/.test(path)) {
+            const match = path.match(/\/(\d+)/);
             return { type: 'opus', id: match ? match[1] : '' };
         }
         return null;
     }
 
-    // 通过 API 获取 oid 和标题（支持 BV 和 av）
+    // 通过 API 获取 oid 和标题（支持 BV/av，新旧动态）
     async function getInformation(pageType, id) {
         if (pageType === 'video' || pageType === 'bangumi') {
             let apiUrl;
@@ -160,6 +172,7 @@ async function initCrawler() {
             const data = await fetchWithRetry(apiUrl);
             return { oid: data.data.aid.toString(), title: data.data.title };
         } else if (pageType === 'opus') {
+            // 动态 API (新旧版均使用此接口)
             const apiUrl = `https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=${id}`;
             const data = await fetchWithRetry(apiUrl);
             const authorName = data.data.item.modules.module_author.name;
@@ -218,7 +231,7 @@ async function initCrawler() {
     let db = null;
     const DB_NAME = 'BiliCommentCrawler';
     const STORE_NAME = 'comments';
-    const BATCH_SIZE = 500; // 每500条写入一次数据库
+    const BATCH_SIZE = 500;
 
     async function openDB() {
         return new Promise((resolve, reject) => {
@@ -277,13 +290,11 @@ async function initCrawler() {
     let pausePromise = Promise.resolve();
     let pauseResolve = null;
     let currentCount = 0;
-    let commentBuffer = [];       // 缓冲区，达到 BATCH_SIZE 时写入 DB
-    let lastSaveSeq = 0;          // 用于断点续爬（存储上次保存的序号）
+    let commentBuffer = [];
     let currentOffset = '';
     let currentOid = '';
     let currentMode = 2;
     let currentType = 1;
-    let totalFetched = 0;         // 已从DB恢复的数量
 
     function setPaused(value) {
         if (value === isPaused) return;
@@ -294,7 +305,7 @@ async function initCrawler() {
             pauseBtn.textContent = '继续';
             pauseBtn.classList.remove('btn-pause');
             pauseBtn.classList.add('btn-continue');
-            downloadBtn.disabled = false; // 暂停时可下载
+            downloadBtn.disabled = false;
         } else {
             if (pauseResolve) pauseResolve();
             pausePromise = Promise.resolve();
@@ -346,7 +357,6 @@ async function initCrawler() {
                         if (stopRequested) break;
                         const comment = extractComment(rep);
                         await addComment(comment);
-                        // 递归抓取更深层（如果存在）
                         if (comment.subCount > 0) {
                             await fetchSubComments(oid, comment.rpid, comment.subCount, type, concurrency);
                         }
@@ -388,26 +398,24 @@ async function initCrawler() {
 
         // 设置 mode 和 type
         if (pageInfo.type === 'opus') {
-            currentMode = 3;   // 动态用热门评论
+            currentMode = 3;
             currentType = 11;
         } else {
-            currentMode = 2;   // 视频/番剧用最新评论
+            currentMode = 2;
             currentType = 1;
         }
 
-        // 恢复上次进度（如果有）
+        // 恢复上次进度
         const savedOffset = localStorage.getItem('crawler_offset');
         const savedCount = parseInt(localStorage.getItem('crawler_count') || '0');
         if (savedOffset && savedCount > 0 && confirm('检测到上次未完成的爬取，是否继续？')) {
             currentOffset = savedOffset;
             currentCount = savedCount;
-            totalFetched = savedCount;
             crawledCountSpan.textContent = currentCount;
             addLog(`恢复进度，已爬取 ${currentCount} 条，从 offset=${currentOffset} 继续`);
         } else {
             currentOffset = '';
             currentCount = 0;
-            totalFetched = 0;
             await clearComments();
             localStorage.removeItem('crawler_offset');
             localStorage.removeItem('crawler_count');
@@ -433,13 +441,12 @@ async function initCrawler() {
                     const comment = extractComment(reply);
                     await addComment(comment);
 
-                    // 二级评论
                     if (isSecond && comment.subCount > 0) {
                         addLog(`正在爬取评论 ${comment.rpid} 的 ${comment.subCount} 条子评论...`);
                         await fetchSubComments(currentOid, comment.rpid, comment.subCount, currentType);
                     }
 
-                    // 冷却机制：每100条暂停5秒，每1000条暂停30秒
+                    // 冷却
                     if (currentCount % 100 === 0 && currentCount !== 0) {
                         addLog(`已爬取 ${currentCount} 条，暂停5秒...`, 'warning');
                         await waitIfPaused();
@@ -451,7 +458,6 @@ async function initCrawler() {
                         await sleep(30000);
                     }
 
-                    // 保存进度到 localStorage
                     localStorage.setItem('crawler_offset', currentOffset);
                     localStorage.setItem('crawler_count', currentCount);
                 }
@@ -471,7 +477,6 @@ async function initCrawler() {
             }
         }
 
-        // 爬取结束
         await flushBuffer();
         localStorage.removeItem('crawler_offset');
         localStorage.removeItem('crawler_count');
@@ -564,5 +569,5 @@ async function initCrawler() {
 
     downloadBtn.addEventListener('click', exportCSV);
 
-    addLog('优化版爬虫已加载（支持 av 号），支持断点续爬和低内存占用');
+    addLog('爬虫已加载（支持av号、旧版动态t.bilibili.com），支持断点续爬和低内存占用');
 }
