@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "一键获取B站评论",
   "version": "2.3",
-  "description": "一键获取B站视频、番剧和动态的评论爬取工具【优化版】",
+  "description": "一键获取B站视频、番剧和动态的评论爬取工具【优化版+支持旧版动态】",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -22,7 +22,8 @@
       "matches": [
         "https://www.bilibili.com/video/*",
         "https://www.bilibili.com/bangumi/play/*",
-        "https://www.bilibili.com/opus/*"
+        "https://www.bilibili.com/opus/*",
+        "https://t.bilibili.com/*"
       ],
       "js": [
         "lib/crypto-js.min.js",
