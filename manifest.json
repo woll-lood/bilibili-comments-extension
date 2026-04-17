@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "一键获取B站评论",
-  "version": "2.2",
-  "description": "一键获取B站视频、番剧和动态的评论爬取工具【完全免费】",
+  "version": "2.3",
+  "description": "一键获取B站视频、番剧和动态的评论爬取工具【优化版】",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -17,9 +17,6 @@
   "host_permissions": [
     "https://*.bilibili.com/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
   "content_scripts": [
     {
       "matches": [
